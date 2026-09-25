@@ -1,0 +1,16 @@
+# Local build artifacts and machine-specific output — never committed.
+
+# Pinned upstream engine clone + build artifacts (fetched by scripts/fetch-engine.sh)
+engine/
+
+# Rendered artifacts and scratch space
+/exports/
+tmp/
+
+# Node/TypeScript build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Logs
+*.log

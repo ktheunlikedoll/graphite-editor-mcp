@@ -1,0 +1,103 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 6977f6f..eafe79c 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2088,6 +2088,7 @@ dependencies = [
+  "interpreted-executor",
+  "log",
+  "preprocessor",
++ "serde_json",
+  "tokio",
+  "wgpu",
+  "wgpu-executor",
+diff --git a/node-graph/graphene-cli/Cargo.toml b/node-graph/graphene-cli/Cargo.toml
+index 517d8ea..cba72c6 100644
+--- a/node-graph/graphene-cli/Cargo.toml
++++ b/node-graph/graphene-cli/Cargo.toml
+@@ -15,6 +15,7 @@ gpu = ["interpreted-executor/gpu", "graphene-std/gpu", "wgpu-executor"]
+ 
+ [dependencies]
+ # Local dependencies
++serde_json = { workspace = true }
+ graphene-std = { workspace = true }
+ interpreted-executor = { workspace = true }
+ graph-craft = { workspace = true, features = ["loading"] }
+diff --git a/node-graph/graphene-cli/src/main.rs b/node-graph/graphene-cli/src/main.rs
+index 673b0c3..2e1a338 100644
+--- a/node-graph/graphene-cli/src/main.rs
++++ b/node-graph/graphene-cli/src/main.rs
+@@ -88,6 +88,10 @@ enum Command {
+ 	},
+ 	ListNodeIdentifiers,
+ 
++	/// Dump full node-registry metadata (display name, category, description, inputs with
++	/// defaults/ranges/units) as JSON for tooling and agent discovery. Exits cleanly.
++	DumpNodeMetadata,
++
+ 	/// Extract embedded legacy .graphite file from the new .gdd file
+ 	ExtractLegacyDoc {
+ 		document: PathBuf,
+@@ -121,6 +125,63 @@ async fn main() -> Result<(), Box<dyn Error>> {
+ 			}
+ 			return Ok(());
+ 		}
++		Command::DumpNodeMetadata => {
++			// Full registry dump for tooling: one JSON object per line keeps streaming/parse
++			// simple and avoids buffering the whole registry in one string.
++			use graphene_std::registry::{FieldMetadata, NodeMetadata, RegistryValueSource};
++
++			fn field_json(field: &FieldMetadata) -> serde_json::Value {
++				let mut f = serde_json::json!({
++					"name": field.name,
++					"description": field.description,
++				});
++				if field.hidden {
++					f["hidden"] = serde_json::json!(true);
++				}
++				if let Some(t) = &field.default_type {
++					f["type"] = serde_json::json!(t.to_string());
++				}
++				if let RegistryValueSource::Default(expr) = field.value_source {
++					if !expr.is_empty() {
++						f["default"] = serde_json::json!(expr);
++					}
++				}
++				if let (Some(lo), Some(hi)) = (field.number_soft_min, field.number_soft_max) {
++					f["softRange"] = serde_json::json!([lo, hi]);
++				}
++				if let (Some(lo), Some(hi)) = (field.number_hard_min, field.number_hard_max) {
++					f["hardRange"] = serde_json::json!([lo, hi]);
++				}
++				if let Some(step) = field.number_step {
++					f["step"] = serde_json::json!(step);
++				}
++				if let Some(unit) = field.unit {
++					f["unit"] = serde_json::json!(unit);
++				}
++				f
++			}
++
++			fn node_json(identifier: &str, meta: &NodeMetadata) -> serde_json::Value {
++				serde_json::json!({
++					"identifier": identifier,
++					"displayName": meta.display_name,
++					"category": meta.category,
++					"description": meta.description,
++					"fields": meta.fields.iter().map(field_json).collect::<Vec<_>>(),
++				})
++			}
++
++			let registry = graphene_std::registry::NODE_METADATA.lock().unwrap();
++			let mut identifiers: Vec<_> = registry.keys().cloned().collect();
++			identifiers.sort_by_key(|x| x.as_str().to_string());
++			for id in identifiers {
++				if let Some(meta) = registry.get(&id) {
++					let line = serde_json::to_string(&node_json(id.as_str(), meta)).expect("metadata is JSON-serializable");
++					println!("{line}");
++				}
++			}
++			return Ok(());
++		}
+ 	};
+ 
+ 	// Load the document by extension: `.gdd` opens the new archive format, anything else is treated as a
